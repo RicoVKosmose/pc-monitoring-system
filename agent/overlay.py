@@ -23,7 +23,9 @@ class HudOverlay(QWidget):
 
     def _init_window(self):
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint| Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(250)
@@ -64,7 +66,6 @@ class HudOverlay(QWidget):
         layout.setContentsMargins(12, 8, 12, 10)
         layout.setSpacing(6)
 
-        # Заголовок виджета + кнопка скрытия
         header = QHBoxLayout()
         self.title_label = QLabel("PC MONITOR")
         self.title_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -81,22 +82,24 @@ class HudOverlay(QWidget):
         header.addWidget(close_btn)
         layout.addLayout(header)
 
-        # Разделитель
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet("background-color: rgba(148, 163, 184, 50); max-height: 1px;")
         layout.addWidget(line)
 
-        # Строки метрик
-        self.cpu_val = self._add_metric_row(layout, "CPU")
-        self.ram_val = self._add_metric_row(layout, "RAM")
-        self.disk_val = self._add_metric_row(layout, "DISK C:")
-        self.net_val = self._add_metric_row(layout, "NET")
+        _, self.cpu_val = self._add_metric_row(layout, "CPU")
+        self.gpu_row, self.gpu_val = self._add_metric_row(layout, "GPU")
+        _, self.ram_val = self._add_metric_row(layout, "RAM")
+        _, self.disk_val = self._add_metric_row(layout, "DISK C:")
+        _, self.net_val = self._add_metric_row(layout, "NET")
 
         root_layout.addWidget(self.container)
 
-    def _add_metric_row(self, parent_layout: QVBoxLayout, name: str) -> QLabel:
-        row = QHBoxLayout()
+    def _add_metric_row(self, parent_layout: QVBoxLayout, name: str) -> tuple[QWidget, QLabel]:
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+
         name_lbl = QLabel(name)
         name_lbl.setFont(QFont("Segoe UI", 9))
         name_lbl.setStyleSheet("color: #94A3B8;")
@@ -108,21 +111,21 @@ class HudOverlay(QWidget):
         row.addWidget(name_lbl)
         row.addStretch()
         row.addWidget(val_lbl)
-        parent_layout.addLayout(row)
-        return val_lbl
+        parent_layout.addWidget(row_widget)
+        return row_widget, val_lbl
 
     def _init_timer(self):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_metrics)
-        self.timer.start(1000)  # обновление раз в 1 секунду
+        self.timer.start(1000)
         self.update_metrics()
 
     def _get_status_color(self, percent: float) -> str:
         if percent >= 85:
-            return "#F87171"  # красный
+            return "#F87171"
         if percent >= 65:
-            return "#FBBF24"  # жёлтый
-        return "#34D399"      # зелёный
+            return "#FBBF24"
+        return "#34D399"
 
     def update_metrics(self):
         data = self.collector.collect()
@@ -132,6 +135,16 @@ class HudOverlay(QWidget):
         cpu_p = data["cpu"]["usage_percent"]
         self.cpu_val.setText(f"{cpu_p:.1f}%")
         self.cpu_val.setStyleSheet(f"color: {self._get_status_color(cpu_p)};")
+
+        gpu = data["gpu"]
+        if gpu["available"] and gpu["usage_percent"] is not None:
+            self.gpu_row.show()
+            gpu_p = gpu["usage_percent"]
+            self.gpu_val.setText(f"{gpu_p:.1f}%")
+            self.gpu_val.setStyleSheet(f"color: {self._get_status_color(gpu_p)};")
+        else:
+            self.gpu_row.hide()
+            self.adjustSize()
 
         ram = data["memory"]
         self.ram_val.setText(f"{ram['used_gb']}/{ram['total_gb']} GB ({ram['percent']}%)")
