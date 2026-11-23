@@ -1,8 +1,16 @@
 import platform
+import shutil
 import socket
+import subprocess
 import time
 from datetime import datetime, timezone
 import psutil
+
+try:
+    import pynvml
+    HAS_NVML = True
+except ImportError:
+    HAS_NVML = False
 
 try:
     import win32pdh
@@ -12,41 +20,97 @@ except ImportError:
 
 
 class GpuMonitor:
-    """Чтение общей загрузки GPU через счётчики производительности Windows (как в Диспетчере задач)."""
+    """Универсальный сборщик нагрузки GPU (NVML -> nvidia-smi -> Windows PDH)."""
     def __init__(self):
-        self.available = False
+        self.mode = None
+        self.nvml_handle = None
+        self.nvidia_smi_path = None
         self.query = None
         self.counter = None
 
-        if not HAS_WIN32PDH:
+        # 1. Пробуем NVIDIA NVML
+        if HAS_NVML:
+            try:
+                pynvml.nvmlInit()
+                if pynvml.nvmlDeviceGetCount() > 0:
+                    self.nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                    self.mode = "nvml"
+                    print("[GPU] Инициализирован через NVML")
+                    return
+            except Exception as e:
+                print(f"[GPU] NVML недоступен: {e}")
+
+        # 2. Пробуем системную утилиту nvidia-smi (идёт с драйвером NVIDIA)
+        smi = shutil.which("nvidia-smi")
+        if smi:
+            self.nvidia_smi_path = smi
+            self.mode = "nvidia-smi"
+            print(f"[GPU] Инициализирован через {smi}")
             return
 
-        try:
-            self.query = win32pdh.OpenQuery()
-            # Счётчик утилизации 3D/вычислительных движков GPU
-            path = r"\GPU Engine(*engtype_3D)\Utilization Percentage"
-            self.counter = win32pdh.AddEnglishCounter(self.query, path)
-            win32pdh.CollectQueryData(self.query)
-            self.available = True
-        except Exception:
-            self.available = False
+        # 3. Пробуем Windows Performance Counter (для Intel HD Graphics / AMD)
+        if HAS_WIN32PDH:
+            for path in (
+                r"\GPU Engine(*engtype_3D)\Utilization Percentage",
+                r"\GPU Engine(*)\Utilization Percentage",
+            ):
+                try:
+                    q = win32pdh.OpenQuery()
+                    c = win32pdh.AddEnglishCounter(q, path)
+                    win32pdh.CollectQueryData(q)
+                    self.query = q
+                    self.counter = c
+                    self.mode = "pdh"
+                    print(f"[GPU] Инициализирован через PDH ({path})")
+                    return
+                except Exception as e:
+                    print(f"[GPU] PDH ({path}) недоступен: {e}")
+
+        print("[GPU] Не удалось найти поддерживаемый источник телеметрии GPU")
 
     def get_usage(self) -> float | None:
-        if not self.available:
-            return None
-        try:
-            win32pdh.CollectQueryData(self.query)
-            _, values = win32pdh.GetFormattedCounterArray(
-                self.counter, win32pdh.PDH_FMT_DOUBLE
-            )
-            # Суммируем нагрузку по всем активным процессам на 3D-движке (не больше 100%)
-            total = sum(v for _, v in values if v >= 0)
-            return round(min(total, 100.0), 1)
-        except Exception:
-            return None
+        if self.mode == "nvml":
+            try:
+                util = pynvml.nvmlDeviceGetUtilizationRates(self.nvml_handle)
+                return round(float(util.gpu), 1)
+            except Exception:
+                return None
+
+        if self.mode == "nvidia-smi":
+            try:
+                out = subprocess.check_output(
+                    [
+                        self.nvidia_smi_path,
+                        "--query-gpu=utilization.gpu",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    timeout=1,
+                )
+                return round(float(out.decode().strip().splitlines()[0]), 1)
+            except Exception:
+                return None
+
+        if self.mode == "pdh":
+            try:
+                win32pdh.CollectQueryData(self.query)
+                _, values = win32pdh.GetFormattedCounterArray(
+                    self.counter, win32pdh.PDH_FMT_DOUBLE
+                )
+                if not values:
+                    return 0.0
+                total = sum(v for name, v in values if v >= 0 and "engtype_3D" in name)
+                if total == 0.0:
+                    total = max((v for _, v in values if v >= 0), default=0.0)
+                return round(min(total, 100.0), 1)
+            except Exception:
+                return 0.0
+
+        return None
 
 
 class TelemetryCollector:
+    """Сбор системных метрик текущего ПК."""
     def __init__(self):
         self._last_net = psutil.net_io_counters()
         self._last_time = time.time()
