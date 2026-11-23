@@ -31,7 +31,7 @@ class HudOverlay(QWidget):
         self.setFixedWidth(250)
 
         screen_geo = self.screen().availableGeometry()
-        self.move(screen_geo.width() - self.width() - 20, 20)
+        self.move(screen_geo.right() - self.width() - 20, screen_geo.top() + 20)
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -165,7 +165,18 @@ class HudOverlay(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            target = event.globalPosition().toPoint() - self._drag_pos
+            screen_geo = self.screen().availableGeometry()
+
+            min_x = screen_geo.left()
+            max_x = screen_geo.right() - self.width() + 1
+            min_y = screen_geo.top()
+            max_y = screen_geo.bottom() - self.height() + 1
+
+            clamped_x = max(min_x, min(target.x(), max_x))
+            clamped_y = max(min_y, min(target.y(), max_y))
+
+            self.move(clamped_x, clamped_y)
             event.accept()
 
     def mouseReleaseEvent(self, event):
