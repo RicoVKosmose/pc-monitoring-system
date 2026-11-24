@@ -1,0 +1,11 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: pc-monitor-rabbitmq
+    ports:
+      - "5672:5672"    # порт для Python (pika)
+      - "15672:15672"  # веб-панель управления
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    restart: unless-stopped
