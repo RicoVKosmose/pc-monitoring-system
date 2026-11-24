@@ -4,6 +4,8 @@ from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 import keyboard
 
+from autostart import is_autostart_enabled, set_autostart
+
 
 class HotkeyBridge(QObject):
     """Мост для безопасной передачи нажатия хоткея из фонового потока в GUI-поток Qt."""
@@ -11,12 +13,11 @@ class HotkeyBridge(QObject):
 
 
 def load_tray_icon() -> QIcon:
-    """Загругка иконки """
-    icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.jpg"
+    """Загружает иконку из assets/icon.png с резервной генерацией, если файл отсутствует."""
+    icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon1.png"
     if icon_path.exists():
         return QIcon(str(icon_path))
 
-    # Резервная программная иконка
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -33,19 +34,25 @@ class SystemTrayManager:
         self.overlay = overlay_widget
         self.hotkey = hotkey
 
-        # Иконка в системном трее
         self.tray = QSystemTrayIcon(load_tray_icon(), parent=self.overlay)
         self.tray.setToolTip(f"PC Monitor ({hotkey.upper()})")
 
-        # Контекстное меню
         menu = QMenu()
+
         self.toggle_action = QAction(f"Показать / Скрыть ({hotkey.upper()})", menu)
         self.toggle_action.triggered.connect(self.toggle_overlay)
+
+        # Пункт управления автозагрузкой с галочкой
+        self.autostart_action = QAction("Запускать вместе с Windows", menu)
+        self.autostart_action.setCheckable(True)
+        self.autostart_action.setChecked(is_autostart_enabled())
+        self.autostart_action.triggered.connect(self._on_autostart_toggled)
 
         quit_action = QAction("Выход", menu)
         quit_action.triggered.connect(self.quit_app)
 
         menu.addAction(self.toggle_action)
+        menu.addAction(self.autostart_action)
         menu.addSeparator()
         menu.addAction(quit_action)
 
@@ -53,10 +60,15 @@ class SystemTrayManager:
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
-        # Глобальная горячая клавиша
         self.hotkey_bridge = HotkeyBridge()
         self.hotkey_bridge.triggered.connect(self.toggle_overlay)
         keyboard.add_hotkey(self.hotkey, self.hotkey_bridge.triggered.emit)
+
+    def _on_autostart_toggled(self, checked: bool):
+        success = set_autostart(checked)
+        if not success:
+
+            self.autostart_action.setChecked(not checked)
 
     def toggle_overlay(self):
         if self.overlay.isVisible():
