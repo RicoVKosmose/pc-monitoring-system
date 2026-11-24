@@ -1,19 +1,36 @@
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import Qt, QAbstractNativeEventFilter
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-import keyboard
 
 from autostart import is_autostart_enabled, set_autostart
 
+# Константы Windows API для RegisterHotKey
+WM_HOTKEY = 0x0312
+MOD_ALT = 0x0001
+MOD_NOREPEAT = 0x4000
+VK_Y = 0x59  # Виртуальный код клавиши Y
+HOTKEY_ID = 1
 
-class HotkeyBridge(QObject):
-    """Мост для безопасной передачи нажатия хоткея из фонового потока в GUI-поток Qt."""
-    triggered = Signal()
+
+class WinHotkeyFilter(QAbstractNativeEventFilter):
+    """Перехватывает системное событие WM_HOTKEY от Windows API."""
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def nativeEventFilter(self, eventType, message):
+        if eventType == b"windows_generic_MSG":
+            msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                self.callback()
+                return True, 0
+        return False, 0
 
 
 def load_tray_icon() -> QIcon:
-    """Загружает иконку из assets/icon.png с резервной генерацией, если файл отсутствует."""
     icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon1.png"
     if icon_path.exists():
         return QIcon(str(icon_path))
@@ -30,19 +47,17 @@ def load_tray_icon() -> QIcon:
 
 
 class SystemTrayManager:
-    def __init__(self, overlay_widget, hotkey: str = "alt+r"):
+    def __init__(self, overlay_widget):
         self.overlay = overlay_widget
-        self.hotkey = hotkey
 
+        # Иконка в трее
         self.tray = QSystemTrayIcon(load_tray_icon(), parent=self.overlay)
-        self.tray.setToolTip(f"PC Monitor ({hotkey.upper()})")
+        self.tray.setToolTip("PC Monitor (Alt+Y)")
 
         menu = QMenu()
-
-        self.toggle_action = QAction(f"Показать / Скрыть ({hotkey.upper()})", menu)
+        self.toggle_action = QAction("Показать / Скрыть (Alt+Y)", menu)
         self.toggle_action.triggered.connect(self.toggle_overlay)
 
-        # Пункт управления автозагрузкой с галочкой
         self.autostart_action = QAction("Запускать вместе с Windows", menu)
         self.autostart_action.setCheckable(True)
         self.autostart_action.setChecked(is_autostart_enabled())
@@ -60,14 +75,14 @@ class SystemTrayManager:
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
-        self.hotkey_bridge = HotkeyBridge()
-        self.hotkey_bridge.triggered.connect(self.toggle_overlay)
-        keyboard.add_hotkey(self.hotkey, self.hotkey_bridge.triggered.emit)
+        self._hotkey_filter = WinHotkeyFilter(self.toggle_overlay)
+        QApplication.instance().installNativeEventFilter(self._hotkey_filter)
+        ok = ctypes.windll.user32.RegisterHotKey(None, HOTKEY_ID, MOD_ALT | MOD_NOREPEAT, VK_Y)
+        if not ok:
+            print("[Hotkey] Не удалось зарегистрировать Alt+Y (сочетание уже занято другой программой)")
 
     def _on_autostart_toggled(self, checked: bool):
-        success = set_autostart(checked)
-        if not success:
-
+        if not set_autostart(checked):
             self.autostart_action.setChecked(not checked)
 
     def toggle_overlay(self):
@@ -85,6 +100,6 @@ class SystemTrayManager:
             self.toggle_overlay()
 
     def quit_app(self):
-        keyboard.unhook_all()
+        ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_ID)
         self.tray.hide()
         QApplication.quit()
