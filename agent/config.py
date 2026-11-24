@@ -10,8 +10,14 @@ DEFAULT_CONFIG = {
     "rabbitmq_port": 5672,
     "rabbitmq_user": "admin",
     "rabbitmq_pass": "admin123",
-    "queue_name": "pc_telemetry",
+    "exchange_name": "pc_monitor",
     "send_interval_sec": 3,
+    "thresholds": {
+        "cpu_percent": 85.0,
+        "gpu_percent": 85.0,
+        "memory_percent": 85.0,
+        "disk_percent": 90.0,
+    },
 }
 
 
@@ -20,7 +26,12 @@ def load_config() -> dict:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return {**DEFAULT_CONFIG, **data}
+                merged = {**DEFAULT_CONFIG, **data}
+                merged["thresholds"] = {
+                    **DEFAULT_CONFIG["thresholds"],
+                    **data.get("thresholds", {}),
+                }
+                return merged
         except Exception:
             pass
 
